@@ -1,4 +1,4 @@
-var resources = require('./github').resources,
+var resources = require('./index').resources,
     nock = require('nock'),
     github = nock('https://api.github.com').log(console.log);
 
