@@ -1,0 +1,10 @@
+{
+  "devDependencies": {
+    "mocha": "2.4.5",
+    "nock": "8.0.0",
+    "cfn-response": "1.0.1"
+  },
+  "scripts": {
+    "test": "./node_modules/.bin/mocha tests.js"
+  }
+}
