@@ -25,7 +25,11 @@ GitHubClient.prototype.request = function(options, callback) {
     });
 
     response.on('end', function() {
-      callback(JSON.parse(body));
+      var err;
+      if (Math.floor(response.statusCode / 100) !== 2) {
+        err = "unexpected response";
+      }
+      callback(JSON.parse(body), err);
     });
   });
 }
@@ -37,7 +41,7 @@ var resources = {
   /**
    * This resource allows you to manage webhooks on a GitHub repository.
    */
-  'Custom::GitHub::Webhook': {
+  'Custom::GitHubWebhook': {
     /**
      * Creates a new webhook on the repo.
      */
@@ -50,8 +54,8 @@ var resources = {
         method: 'POST',
         path: '/repos/' + repo + '/hooks'
       }
-      var req = client.request(options, function(body) {
-        return callback(body.id);
+      var req = client.request(options, function(body, err) {
+        return callback(body.id, err);
       })
       req.write(JSON.stringify(event.ResourceProperties.Params));
       return req.end();
@@ -70,8 +74,8 @@ var resources = {
         method: 'PATCH',
         path: '/repos/' + repo + '/hooks/' + id
       }
-      var req = client.request(options, function(body) {
-        return callback(body.id);
+      var req = client.request(options, function(body, err) {
+        return callback(body.id, err);
       })
       req.write(JSON.stringify(event.ResourceProperties.Params));
       return req.end();
@@ -90,8 +94,8 @@ var resources = {
         method: 'DELETE',
         path: '/repos/' + repo + '/hooks/' + id
       }
-      var req = client.request(options, function(body) {
-        return callback(body.id);
+      var req = client.request(options, function(body, err) {
+        return callback(body.id, err);
       })
       return req.end();
     }
@@ -102,7 +106,16 @@ exports.resources = resources;
 exports.handler = function(event, context) {
   console.log('REQUEST RECEIVED:\\n', JSON.stringify(event));
 
-  resources[event.ResourceType].call(event, function(id) {
-    response.send(event, context, response.SUCCESS, {}, id);
-  });
+  var resource = resources[event.ResourceType];
+  if (resource) {
+    resource[event.RequestType].call(event, function(id, err) {
+      if (err) {
+        response.send(event, context, response.FAILED, {Error: err});
+      } else {
+        response.send(event, context, response.SUCCESS, {}, id);
+      }
+    });
+  } else {
+    console.log('no resource handler', event.ResourceType);
+  }
 };

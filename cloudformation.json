@@ -1,0 +1,31 @@
+{
+  "Parameters": {
+    "ServiceToken": {
+      "Type": "String"
+    },
+    "ApiToken": {
+      "Type": "String"
+    }
+  },
+
+  "Resources": {
+    "GitHubResourcesWebhookTest": {
+      "Type": "Custom::GitHubWebhook",
+      "Properties": {
+        "ServiceToken": { "Ref": "ServiceToken" },
+        "ApiToken": { "Ref": "ApiToken" },
+        "Repository": "ejholmes/github-resources",
+        "Params": {
+          "name": "web",
+          "events": ["deployment"],
+          "active": true,
+          "config": {
+            "url": "http://requestb.in/17dv0eu1",
+            "content_type": "json",
+            "secret": "secret"
+          }
+        }
+      }
+    }
+  }
+}
