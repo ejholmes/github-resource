@@ -1,5 +1,47 @@
-var response = require('cfn-response'),
-    http = require('https');
+var http = require('https');
+ 
+function cfnsend(event, context, responseStatus, responseData, physicalResourceId) {
+    var responseBody = JSON.stringify({
+        Status: responseStatus,
+        Reason: "See the details in CloudWatch Log Stream: " + context.logStreamName,
+        PhysicalResourceId: physicalResourceId || context.logStreamName,
+        StackId: event.StackId,
+        RequestId: event.RequestId,
+        LogicalResourceId: event.LogicalResourceId,
+        Data: responseData
+    });
+ 
+    console.log("Response body:\n", responseBody);
+ 
+    var https = require("https");
+    var url = require("url");
+ 
+    var parsedUrl = url.parse(event.ResponseURL);
+    var options = {
+        hostname: parsedUrl.hostname,
+        port: 443,
+        path: parsedUrl.path,
+        method: "PUT",
+        headers: {
+            "content-type": "",
+            "content-length": responseBody.length
+        }
+    };
+ 
+    var request = https.request(options, function(response) {
+        console.log("Status code: " + response.statusCode);
+        console.log("Status message: " + response.statusMessage);
+        context.done();
+    });
+ 
+    request.on("error", function(error) {
+        console.log("send(..) failed executing https.request(..): " + error);
+        context.done();
+    });
+ 
+    request.write(responseBody);
+    request.end();
+}
 
 var GITHUB_API = 'api.github.com';
 
@@ -16,6 +58,8 @@ GitHubClient.prototype.request = function(options, callback) {
     options.headers = {}
   }
   options.headers['Content-Type'] = 'application/json'
+  options.headers['User-Agent'] = 'ejholmes/github-resource'
+  options.headers['Authorization'] = 'token ' + this.token;
 
   return http.request(options, function(response) {
     var body = '';
@@ -108,11 +152,12 @@ exports.handler = function(event, context) {
 
   var resource = resources[event.ResourceType];
   if (resource) {
-    resource[event.RequestType].call(event, function(id, err) {
+    var fn = resource[event.RequestType];
+    fn.call(fn, event, function(id, err) {
       if (err) {
-        response.send(event, context, response.FAILED, {Error: err});
+        cfnsend(event, context, "FAILED", {Error: err});
       } else {
-        response.send(event, context, response.SUCCESS, {}, id);
+        cfnsend(event, context, "SUCCESS", {}, id);
       }
     });
   } else {
