@@ -1,46 +1,51 @@
-var http = require('https');
+var http = require('https'),
+    url = require('url');
  
-function cfnsend(event, context, responseStatus, responseData, physicalResourceId) {
-    var responseBody = JSON.stringify({
-        Status: responseStatus,
-        Reason: "See the details in CloudWatch Log Stream: " + context.logStreamName,
-        PhysicalResourceId: physicalResourceId || context.logStreamName,
-        StackId: event.StackId,
-        RequestId: event.RequestId,
-        LogicalResourceId: event.LogicalResourceId,
-        Data: responseData
-    });
- 
-    console.log("Response body:\n", responseBody);
- 
-    var https = require("https");
-    var url = require("url");
- 
-    var parsedUrl = url.parse(event.ResponseURL);
-    var options = {
-        hostname: parsedUrl.hostname,
-        port: 443,
-        path: parsedUrl.path,
-        method: "PUT",
-        headers: {
-            "content-type": "",
-            "content-length": responseBody.length
-        }
-    };
- 
-    var request = https.request(options, function(response) {
-        console.log("Status code: " + response.statusCode);
-        console.log("Status message: " + response.statusMessage);
-        context.done();
-    });
- 
-    request.on("error", function(error) {
-        console.log("send(..) failed executing https.request(..): " + error);
-        context.done();
-    });
- 
-    request.write(responseBody);
-    request.end();
+function cfnsend(event, context, err, physicalResourceId) {
+  var response = {
+    StackId: event.StackId,
+    RequestId: event.RequestId,
+    LogicalResourceId: event.LogicalResourceId,
+    Data: {},
+    PhysicalResourceId: physicalResourceId
+  };
+
+  if (err) {
+    response.Reason = err;
+    response.Status = "FAILED";
+  } else {
+    response.Status = "SUCCESS";
+  }
+
+  var responseBody = JSON.stringify(response);
+
+  console.log("Response body:\n", responseBody);
+
+  var parsedUrl = url.parse(event.ResponseURL);
+  var options = {
+    hostname: parsedUrl.hostname,
+    port: 443,
+    path: parsedUrl.path,
+    method: "PUT",
+    headers: {
+      "content-type": "",
+      "content-length": responseBody.length
+    }
+  };
+
+  var request = http.request(options, function(response) {
+    console.log("Status code: " + response.statusCode);
+    console.log("Status message: " + response.statusMessage);
+    context.done();
+  });
+
+  request.on("error", function(error) {
+    console.log("send(..) failed executing https.request(..): " + error);
+    context.done();
+  });
+
+  request.write(responseBody);
+  request.end();
 }
 
 var GITHUB_API = 'api.github.com';
@@ -70,12 +75,33 @@ GitHubClient.prototype.request = function(options, callback) {
 
     response.on('end', function() {
       var err;
+      var jsonBody = JSON.parse(body)
+
       if (Math.floor(response.statusCode / 100) !== 2) {
-        err = "unexpected response";
+        if (jsonBody.message) {
+          err = jsonBody;
+        } else {
+          err = {
+            message: "unexpected response: " + response.statusCode
+          }
+        }
       }
-      callback(JSON.parse(body), err);
+
+      callback(jsonBody, err, response);
     });
   });
+}
+
+/**
+ * fixParams ensures that params that should be a bool are actually a boolean.
+ */
+function fixParams(params) {
+  if (params.active === 'true') {
+    params.active = true;
+  } else if (params.active === 'false') {
+    params.active = false;
+  }
+  return params;
 }
 
 /**
@@ -98,10 +124,20 @@ var resources = {
         method: 'POST',
         path: '/repos/' + repo + '/hooks'
       }
-      var req = client.request(options, function(body, err) {
-        return callback(body.id, err);
+      var req = client.request(options, function(body, err, response) {
+        var id = String(body.id);
+
+        if (err) {
+          var errMessage = err.message;
+          if (err.message == 'Validation Failed' && err.errors.length > 0) {
+            errMessage = err.errors[0].message;
+          }
+          return callback(id, errMessage);
+        } else {
+          return callback(id, null);
+        }
       })
-      req.write(JSON.stringify(event.ResourceProperties.Params));
+      req.write(JSON.stringify(fixParams(event.ResourceProperties.Params)));
       return req.end();
     },
 
@@ -118,15 +154,19 @@ var resources = {
         method: 'PATCH',
         path: '/repos/' + repo + '/hooks/' + id
       }
-      var req = client.request(options, function(body, err) {
-        return callback(body.id, err);
+      var req = client.request(options, function(body, err, response) {
+        if (err) {
+          return callback(id, err.message);
+        } else {
+          return callback(id, null);
+        }
       })
-      req.write(JSON.stringify(event.ResourceProperties.Params));
+      req.write(JSON.stringify(fixParams(event.ResourceProperties.Params)));
       return req.end();
     },
 
     /**
-     * Delets a webhook on the repo.
+     * Deletes a webhook on the repo.
      */
     Delete: function(event, callback) {
       var repo     = event.ResourceProperties.Repository,
@@ -138,29 +178,45 @@ var resources = {
         method: 'DELETE',
         path: '/repos/' + repo + '/hooks/' + id
       }
-      var req = client.request(options, function(body, err) {
-        return callback(body.id, err);
+      var req = client.request(options, function(body, err, response) {
+        if (response.statusCode == 404) {
+          // Ignore error if it's a 404.
+          return callback(id, null);
+        } else if (err) {
+          return callback(id, err.message);
+        } else {
+          return callback(id, null);
+        }
       })
       return req.end();
     }
   }
 }
 
-exports.resources = resources;
-exports.handler = function(event, context) {
-  console.log('REQUEST RECEIVED:\\n', JSON.stringify(event));
+/**
+ * Returns a lambda handler that will use the given CloudFormation resources to
+ * handle requests.
+ */
+function handleWithResources(resources) {
+  return function(event, context) {
+    console.log('REQUEST RECEIVED:\\n', JSON.stringify(event));
 
-  var resource = resources[event.ResourceType];
-  if (resource) {
-    var fn = resource[event.RequestType];
-    fn.call(fn, event, function(id, err) {
-      if (err) {
-        cfnsend(event, context, "FAILED", {Error: err});
-      } else {
-        cfnsend(event, context, "SUCCESS", {}, id);
-      }
-    });
-  } else {
-    console.log('no resource handler', event.ResourceType);
+    var resource = resources[event.ResourceType];
+    if (resource) {
+      var fn = resource[event.RequestType];
+      fn.call(fn, event, function(id, err) {
+        if (err) {
+          cfnsend(event, context, err, id);
+        } else {
+          cfnsend(event, context, null, id);
+        }
+      });
+    } else {
+      console.log('no resource handler', event.ResourceType);
+    }
   }
-};
+}
+
+exports.resources = resources;
+exports.handleWithResources = handleWithResources;
+exports.handler = handleWithResources(resources);

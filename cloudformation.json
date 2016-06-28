@@ -14,7 +14,7 @@
       "Properties": {
         "ServiceToken": { "Ref": "ServiceToken" },
         "ApiToken": { "Ref": "ApiToken" },
-        "Repository": "ejholmes/github-resources",
+        "Repository": "ejholmes/github-resource",
         "Params": {
           "name": "web",
           "events": ["deployment"],
